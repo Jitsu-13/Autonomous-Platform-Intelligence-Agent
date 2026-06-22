@@ -3,6 +3,7 @@ Executor: runs planned steps against Linear, handles partial failures,
 resolves placeholders from prior step outputs, and produces StepResult records.
 """
 
+import os
 import time
 import json
 import re
@@ -99,6 +100,7 @@ def execute_step(
     # 3. Execute the capability
     try:
         result = _run_capability(cap_data, resolved_params, client)
+        result = _postprocess_result(step.capability, result)
         duration = int((time.time() - start) * 1000)
         calls = client.call_count - prior_calls
         record_capability_use(step.capability, success=True, duration_ms=duration)
@@ -182,6 +184,21 @@ def _preprocess_params(params: dict) -> dict:
                     continue
         cleaned[k] = v
     return cleaned
+
+
+def _postprocess_result(capability_name: str, result: dict) -> dict:
+    """Apply env-var preferences to results before storing in context."""
+    if capability_name == "get_teams":
+        preferred = os.getenv("LINEAR_TEAM_ID", "").strip().upper()
+        if preferred:
+            nodes = result.get("teams", {}).get("nodes", [])
+            # Move the preferred team to index 0 so <<step0.teams.nodes.0.id>> is always correct
+            sorted_nodes = sorted(
+                nodes,
+                key=lambda t: 0 if t.get("key", "").upper() == preferred or t.get("id") == preferred else 1,
+            )
+            result["teams"]["nodes"] = sorted_nodes
+    return result
 
 
 def _run_capability(cap_data: dict, params: dict, client: LinearClient) -> dict:
