@@ -1,5 +1,35 @@
 # Architecture
 
+## 0. No agent framework — and why
+
+This agent is built entirely from scratch in plain Python. No LangChain, LlamaIndex,
+CrewAI, AutoGen, or any other agent abstraction layer is used.
+
+**Dependencies used and why:**
+
+| Library | Role | Why not a framework? |
+|---|---|---|
+| `openai` / `anthropic` | LLM API calls only | Direct SDK call — no chain abstraction |
+| `httpx` | Linear GraphQL HTTP requests | Lightweight, no agent coupling |
+| `sqlite3` (stdlib) | Persistent memory | Zero dependency, fully auditable |
+| `pydantic` | Data models for plan/step/report | Type safety only |
+| `click` + `rich` | CLI and terminal output | UX only |
+
+**Why build from scratch:**
+
+Agent frameworks abstract away the components this assignment specifically evaluates.
+LangChain's memory, for example, does embedding-based retrieval of past prompts —
+that's a different architecture from structured relational memory that changes planning
+decisions. Using a framework would make the evaluation criteria harder to demonstrate,
+not easier.
+
+Building from scratch also means every design decision is explicit and explainable:
+the placeholder resolver (`<<stepN.path>>`), the two-layer SQLite schema, the
+`exec()`-based synthesis with live API testing, the `_postprocess_result` hook that
+respects `LINEAR_TEAM_ID` — each of these is a deliberate choice, not a framework default.
+
+---
+
 ## 1. What does your memory system store, and why did you structure it that way?
 
 The memory system has two distinct SQLite layers:
