@@ -37,8 +37,8 @@ class ExecutorContext:
         return val
 
     def _resolve_string(self, val: str) -> Any:
-        # <<step_N.path.to.value>> syntax
-        pattern = r"<<step_(\d+)\.([^>]+)>>"
+        # matches both <<step0.path>> and <<step_0.path>>
+        pattern = r"<<step_?(\d+)\.([^>]+)>>"
         match = re.search(pattern, val)
         if match:
             step_idx = int(match.group(1))
@@ -48,7 +48,8 @@ class ExecutorContext:
                 if isinstance(data, dict):
                     data = data.get(key)
                 elif isinstance(data, list) and key.isdigit():
-                    data = data[int(key)]
+                    idx = int(key)
+                    data = data[idx] if idx < len(data) else None
                 else:
                     data = None
                 if data is None:
@@ -145,22 +146,60 @@ def execute_step(
         )
 
 
+_PRIORITY_MAP = {
+    "urgent": 1, "high": 2, "medium": 3, "normal": 3, "low": 4, "none": 0, "no priority": 0,
+}
+
+
+def _preprocess_params(params: dict) -> dict:
+    """
+    Clean params before sending to GraphQL:
+    - Strip keys with None / unresolved placeholder values
+    - Coerce string priority to int (Linear requires Int)
+    - Ensure labelIds is a list, not a bare string
+    """
+    cleaned = {}
+    for k, v in params.items():
+        # Drop None or unresolved <<...>> placeholders
+        if v is None:
+            continue
+        if isinstance(v, str) and v.startswith("<<") and v.endswith(">>"):
+            continue
+        # Priority: convert string to int
+        if k == "priority":
+            if isinstance(v, str):
+                v = _PRIORITY_MAP.get(v.lower().strip(), 3)
+            elif not isinstance(v, int):
+                v = int(v)
+        # labelIds: must be a list of strings
+        if k == "labelIds":
+            if isinstance(v, str):
+                v = [v] if v else []
+            elif isinstance(v, list):
+                # drop any unresolved placeholders inside the list
+                v = [i for i in v if i and not (isinstance(i, str) and i.startswith("<<"))]
+                if not v:
+                    continue
+        cleaned[k] = v
+    return cleaned
+
+
 def _run_capability(cap_data: dict, params: dict, client: LinearClient) -> dict:
     op_type = cap_data["operation_type"]
     impl = cap_data["implementation"]
 
     if op_type in ("graphql_query", "graphql_mutation"):
-        variables = params if params else None
+        clean = _preprocess_params(params)
+        variables = clean if clean else None
         return client.execute(impl, variables)
 
     elif op_type in ("synthesized", "composite"):
-        # Synthesized capabilities are stored as Python source
         namespace: dict = {}
         exec(f"import json\n{impl}", namespace)
         fn = namespace.get("execute")
         if not callable(fn):
             raise RuntimeError(f"Synthesized capability '{cap_data['name']}' has no execute() function")
-        result = fn(client, params)
+        result = fn(client, _preprocess_params(params))
         return result if isinstance(result, dict) else {"result": result}
 
     else:
