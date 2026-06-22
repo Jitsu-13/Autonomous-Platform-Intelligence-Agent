@@ -5,21 +5,12 @@ changes based on what the agent has learned.
 """
 
 import json
-import os
-from anthropic import Anthropic
+import hashlib
 
+from agent.llm.provider import complete
 from agent.memory.manager import get_planner_context
 from agent.memory.execution_store import get_run_count_for_intent
 from agent.core.models import ExecutionPlan, PlannedStep
-
-_client = None
-
-
-def _get_client() -> Anthropic:
-    global _client
-    if _client is None:
-        _client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
-    return _client
 
 
 SYSTEM_PROMPT = """You are the Planner component of an Autonomous Linear Agent.
@@ -70,34 +61,24 @@ def build_plan(instruction: str) -> tuple[ExecutionPlan, int]:
     ctx = get_planner_context(instruction)
     run_count = get_run_count_for_intent(_hash_instruction(instruction))
 
-    capabilities_text = json.dumps(ctx["available_capabilities"], indent=2)
-    past_text = json.dumps(ctx["similar_past_executions"], indent=2)
-    risky_text = json.dumps(ctx["risky_operations"], indent=2)
-
     user_message = f"""INSTRUCTION: {instruction}
 
 RUN COUNT FOR SIMILAR INSTRUCTIONS: {run_count}
 
 AVAILABLE CAPABILITIES ({ctx['total_capabilities']} total, {ctx['synthesized_capabilities']} synthesized):
-{capabilities_text}
+{json.dumps(ctx['available_capabilities'], indent=2)}
 
 PAST SIMILAR EXECUTIONS:
-{past_text}
+{json.dumps(ctx['similar_past_executions'], indent=2)}
 
 RISKY OPERATIONS (high failure rate):
-{risky_text}
+{json.dumps(ctx['risky_operations'], indent=2)}
 
 Produce the execution plan JSON."""
 
-    response = _get_client().messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2048,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
-    )
+    response = complete(SYSTEM_PROMPT, user_message, max_tokens=2048, fast=False)
 
-    raw = response.content[0].text.strip()
-    # Strip markdown fences if present
+    raw = response.text
     if raw.startswith("```"):
         raw = raw.split("```")[1]
         if raw.startswith("json"):
@@ -105,21 +86,19 @@ Produce the execution plan JSON."""
     raw = raw.strip()
 
     data = json.loads(raw)
-    tokens = response.usage.input_tokens + response.usage.output_tokens
-
     steps = [PlannedStep(**s) for s in data["steps"]]
 
-    return ExecutionPlan(
+    plan = ExecutionPlan(
         instruction=instruction,
         intent_summary=data["intent_summary"],
         steps=steps,
         confidence=data.get("confidence", 1.0),
         memory_used=data.get("memory_used", False),
         memory_insights=data.get("memory_insights", []),
-    ), tokens
+    )
+    return plan, response.tokens_used
 
 
 def _hash_instruction(instruction: str) -> str:
-    import hashlib
     normalised = " ".join(instruction.lower().split())
     return hashlib.sha256(normalised.encode()).hexdigest()[:16]

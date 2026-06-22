@@ -5,32 +5,21 @@ When the executor encounters a capability name not in memory, it calls this modu
 The synthesizer:
   1. Introspects Linear's GraphQL schema to understand what's available
   2. Asks the LLM to write a Python function that implements the capability
-  3. Tests the generated function against a dry-run (schema validation)
+  3. Tests the generated function against the real API
   4. Registers it in capability memory if it works
   5. Reports clearly if it cannot proceed after MAX_ATTEMPTS
 """
 
 import json
-import os
 import textwrap
 import traceback
 from typing import Optional
-import anthropic
 
+from agent.llm.provider import complete
 from agent.platform.linear.client import LinearClient
 from agent.memory.capability_store import Capability, register_capability, get_capability
 
 MAX_ATTEMPTS = 3
-
-_llm = None
-
-
-def _get_llm() -> anthropic.Anthropic:
-    global _llm
-    if _llm is None:
-        _llm = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY", ""))
-    return _llm
-
 
 SYNTHESIS_SYSTEM = """You are a GraphQL + Python code generator for the Linear API.
 
@@ -74,7 +63,6 @@ def synthesize_capability(
             is_synthesized=bool(existing["is_synthesized"]),
         )
 
-    # Introspect schema to understand what's available
     schema_context = _gather_schema_context(client, name, description)
 
     last_error = ""
@@ -102,12 +90,10 @@ def synthesize_capability(
 
 
 def _gather_schema_context(client: LinearClient, name: str, description: str) -> str:
-    """Introspect relevant types from the Linear schema."""
     context_parts = []
-
-    # Heuristic: guess which types to introspect based on name/description
-    type_hints = []
     combined = (name + " " + description).lower()
+
+    type_hints = []
     if "issue" in combined:
         type_hints.extend(["IssueFilter", "IssueCreateInput", "IssueUpdateInput"])
     if "cycle" in combined or "sprint" in combined:
@@ -119,7 +105,6 @@ def _gather_schema_context(client: LinearClient, name: str, description: str) ->
     if "label" in combined:
         type_hints.append("IssueLabelFilter")
 
-    # Always include available mutations for context
     try:
         mutations = client.get_available_mutations()
         relevant = [m for m in mutations if any(k in m["name"].lower() for k in combined.split()[:3])]
@@ -146,7 +131,10 @@ def _generate_code(
     schema_context: str,
     last_error: str,
 ) -> Optional[str]:
-    error_note = f"\nPREVIOUS ATTEMPT FAILED WITH: {last_error}\nFix that error." if last_error else ""
+    error_note = (
+        f"\nPREVIOUS ATTEMPT FAILED WITH: {last_error}\nFix that error."
+        if last_error else ""
+    )
 
     prompt = f"""Capability to implement: {name}
 Description: {description}
@@ -159,14 +147,9 @@ Schema context from Linear:
 Write the Python function now."""
 
     try:
-        response = _get_llm().messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=1024,
-            system=SYNTHESIS_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        code = response.content[0].text.strip()
-        # Strip any accidental markdown fences
+        response = complete(SYNTHESIS_SYSTEM, prompt, max_tokens=1024, fast=True)
+        code = response.text
+
         if "```" in code:
             parts = code.split("```")
             for part in parts:
@@ -180,26 +163,16 @@ Write the Python function now."""
         return None
 
 
-def _test_capability(code: str, client: LinearClient, params: dict) -> tuple[bool, Optional[dict], Optional[str]]:
-    """
-    Test synthesized code by executing it with a dry-run params dict.
-    We use the real client but catch errors — a successful API call (even returning empty data)
-    means the code is syntactically and structurally valid.
-    """
+def _test_capability(
+    code: str, client: LinearClient, params: dict
+) -> tuple[bool, Optional[dict], Optional[str]]:
     try:
         namespace: dict = {}
-        exec(
-            textwrap.dedent(f"""
-import json
-{code}
-"""),
-            namespace,
-        )
+        exec(textwrap.dedent(f"import json\n{code}"), namespace)
         execute_fn = namespace.get("execute")
         if not callable(execute_fn):
             return False, None, "No callable 'execute' function found in generated code"
 
-        # Use a minimal/safe params dict for validation
         test_params = {k: v for k, v in params.items() if v and v != "<<placeholder>>"}
         result = execute_fn(client, test_params)
         return True, result, None
