@@ -22,17 +22,21 @@ where each step maps to exactly one capability the agent has.
 Reference output from a prior step with: <<stepN.path.to.value>>
 where N is the step_index of the prior step.
 
-EXACT PATHS FOR COMMON CAPABILITIES:
-  get_teams           team id:    <<step0.teams.nodes.0.id>>
-  get_teams           team name:  <<step0.teams.nodes.0.name>>
-  get_label_by_name   label id:   <<step1.issueLabels.nodes.0.id>>
-  get_labels          label id:   <<step1.issueLabels.nodes.0.id>>
-  get_state_by_type   state id:   <<step1.workflowStates.nodes.0.id>>
-  get_workflow_states state id:   <<step1.workflowStates.nodes.0.id>>
-  get_cycles          cycle id:   <<step1.cycles.nodes.0.id>>
-  get_users           user id:    <<step1.users.nodes.0.id>>
-  create_issue        issue id:   <<step2.issueCreate.issue.id>>
-  create_issue        issue url:  <<step2.issueCreate.issue.url>>
+EXACT PATHS FOR COMMON CAPABILITIES (replace N with actual step_index):
+  get_teams                   team id:    <<stepN.teams.nodes.0.id>>
+  get_label_by_name           label id:   <<stepN.issueLabels.nodes.0.id>>
+  get_labels                  label id:   <<stepN.issueLabels.nodes.0.id>>
+  get_state_by_type           state id:   <<stepN.workflowStates.nodes.0.id>>
+  get_workflow_states         state id:   <<stepN.workflowStates.nodes.0.id>>
+  get_cycles                  cycle id:   <<stepN.cycles.nodes.0.id>>
+  get_users                   user id:    <<stepN.users.nodes.0.id>>
+  create_issue                issue id:   <<stepN.issueCreate.issue.id>>
+  create_issue                issue url:  <<stepN.issueCreate.issue.url>>
+  get_unassigned_open_issues         issue id:   <<stepN.issues.nodes.0.id>>
+  get_cycle_issues                   issue id:   <<stepN.issues.nodes.0.id>>
+  get_backlog_issues                 issue id:   <<stepN.issues.nodes.0.id>>
+  create_triage_summary_issue issues_data: <<stepN.issues.nodes>>  (pass entire array)
+  create_triage_summary_issue result url:  <<stepN.issueCreate.issue.url>>
 
 --- PRIORITY ENCODING (create_issue / update_issue) ---
 priority MUST be an INTEGER. Never use strings like "high" or "urgent".
@@ -58,6 +62,9 @@ for all subsequent steps that need teamId. Never hardcode a team ID.
 6. Set confidence (0.0-1.0) based on how well the available capabilities cover this instruction.
 7. In memory_insights, list any adjustments you made because of past execution data.
 8. Every step that needs a teamId must reference it via placeholder from the get_teams step.
+9. When instruction asks to "create a summary", "create a report", or "breakdown" of issues: use
+   create_triage_summary_issue with issues_data=<<stepN.issues.nodes>> — NEVER use create_issue
+   with a static description for this, as the description will be empty/incorrect.
 
 --- OUTPUT FORMAT (JSON only, no prose) ---
 {

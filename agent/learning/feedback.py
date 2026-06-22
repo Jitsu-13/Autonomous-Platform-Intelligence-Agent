@@ -77,19 +77,34 @@ def record_and_learn(report: ExecutionReport) -> list[str]:
 def get_improvement_report(instruction: str) -> dict:
     """
     Returns a before/after comparison for a given instruction type.
+    Accepts an exact instruction string OR a short keyword substring.
     The key artifact for the demo's measurable learning signal.
     """
     intent_hash = _hash_instruction(instruction)
     conn = get_connection()
 
+    # Exact hash match first
     cur = conn.execute(
-        """SELECT run_number, api_calls, duration_ms, outcome, optimizations
+        """SELECT run_number, api_calls, duration_ms, outcome, optimizations, task_label
            FROM task_metrics
            WHERE intent_hash = ?
            ORDER BY run_number ASC""",
         (intent_hash,),
     )
     rows = [dict(r) for r in cur.fetchall()]
+
+    # Fallback: fuzzy substring match on task_label
+    if len(rows) < 1:
+        keyword = instruction.lower().strip()[:40]
+        cur = conn.execute(
+            """SELECT run_number, api_calls, duration_ms, outcome, optimizations, task_label
+               FROM task_metrics
+               WHERE LOWER(task_label) LIKE ?
+               ORDER BY run_number ASC""",
+            (f"%{keyword}%",),
+        )
+        rows = [dict(r) for r in cur.fetchall()]
+
     conn.close()
 
     if len(rows) < 2:

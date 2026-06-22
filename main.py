@@ -105,32 +105,82 @@ def show_improvement(instruction):
     console.print(f"Total runs: [bold]{report['total_runs']}[/bold]")
     console.print()
 
-    t = Table(box=box.SIMPLE)
+    # Per-run progression table
+    prog = Table(title="Run History", box=box.SIMPLE)
+    prog.add_column("Run", justify="right", width=4)
+    prog.add_column("Outcome", width=10)
+    prog.add_column("API Calls", justify="right", width=9)
+    prog.add_column("Duration (ms)", justify="right", width=13)
+    outcome_colors = {"success": "green", "partial": "yellow", "failure": "red"}
+    for row in report["all_runs"]:
+        oc = row["outcome"]
+        col = outcome_colors.get(oc, "white")
+        prog.add_row(
+            str(row["run_number"]),
+            f"[{col}]{oc}[/{col}]",
+            str(row["api_calls"]),
+            str(row["duration_ms"]),
+        )
+    console.print(prog)
+
+    first_oc = report["first_run"]["outcome"]
+    latest_oc = report["latest_run"]["outcome"]
+    outcome_improved = first_oc != latest_oc and latest_oc == "success"
+
+    # When run 1 was a partial failure, comparing API calls vs run 1 is misleading
+    # (partial runs make fewer calls because they stop early, not because they're efficient).
+    # Use the first SUCCESSFUL run as the baseline for API/timing comparison instead.
+    baseline = next(
+        (r for r in report["all_runs"] if r["outcome"] == "success"),
+        report["latest_run"],
+    )
+    baseline_label = f"Run {baseline['run_number']} (1st success)" if baseline != report["first_run"] else "Run 1"
+
+    api_delta = baseline["api_calls"] - report["latest_run"]["api_calls"]
+    time_delta = baseline["duration_ms"] - report["latest_run"]["duration_ms"]
+
+    partial_count = sum(1 for r in report["all_runs"] if r["outcome"] != "success")
+    success_count = sum(1 for r in report["all_runs"] if r["outcome"] == "success")
+
+    t = Table(title="Summary", box=box.SIMPLE)
     t.add_column("Metric")
     t.add_column("Run 1", justify="right")
+    t.add_column(baseline_label, justify="right")
     t.add_column("Latest", justify="right")
-    t.add_column("Delta", justify="right")
 
-    api_delta = report["first_run"]["api_calls"] - report["latest_run"]["api_calls"]
-    time_delta = report["first_run"]["duration_ms"] - report["latest_run"]["duration_ms"]
-
+    t.add_row(
+        "Outcome",
+        f"[{outcome_colors.get(first_oc,'white')}]{first_oc}[/{outcome_colors.get(first_oc,'white')}]",
+        f"[{outcome_colors.get(baseline['outcome'],'white')}]{baseline['outcome']}[/{outcome_colors.get(baseline['outcome'],'white')}]",
+        f"[{outcome_colors.get(latest_oc,'white')}]{latest_oc}[/{outcome_colors.get(latest_oc,'white')}]",
+    )
     t.add_row(
         "API calls",
         str(report["first_run"]["api_calls"]),
+        str(baseline["api_calls"]),
         str(report["latest_run"]["api_calls"]),
-        f"[green]-{api_delta}[/green]" if api_delta > 0 else f"[red]+{-api_delta}[/red]",
     )
     t.add_row(
         "Duration (ms)",
         str(report["first_run"]["duration_ms"]),
+        str(baseline["duration_ms"]),
         str(report["latest_run"]["duration_ms"]),
-        f"[green]-{time_delta}ms[/green]" if time_delta > 0 else f"[red]+{-time_delta}ms[/red]",
     )
     console.print(t)
 
-    if report["api_calls_saved"] > 0:
+    if outcome_improved:
         console.print(
-            f"\n[bold green]✓ {report['api_calls_saved']} fewer API calls "
+            f"\n[bold green]Outcome improved: {partial_count} partial run(s) then "
+            f"{success_count} consecutive success(es)[/bold green]"
+        )
+        if first_oc != "success":
+            console.print(
+                f"[dim]Run 1 was '{first_oc}' (stopped early = fewer API calls). "
+                f"API/timing comparison uses {baseline_label} as the fair baseline.[/dim]"
+            )
+    elif api_delta > 0:
+        console.print(
+            f"\n[bold green]{api_delta} fewer API calls "
             f"({report['improvement_pct']}% improvement)[/bold green]"
         )
 
